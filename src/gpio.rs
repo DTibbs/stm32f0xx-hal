@@ -19,6 +19,10 @@ trait GpioRegExt {
     fn is_set_low(&self, pos: u8) -> bool;
     fn set_high(&self, pos: u8);
     fn set_low(&self, pos: u8);
+    fn set_mode_to_floating_input(&self, pos: u8);
+    fn set_mode_to_pull_down_input(&self, pos: u8);
+    fn set_mode_to_pull_up_input(&self, pos: u8);
+    fn set_mode_to_open_drain_output(&self, pos: u8);
 }
 
 /// Alternate function 0
@@ -85,6 +89,33 @@ unsafe impl<MODE> Sync for Pin<MODE> {}
 // NOTE(unsafe) this only enables read access to the same pin from multiple
 // threads
 unsafe impl<MODE> Send for Pin<MODE> {}
+
+use cortex_m::interrupt::CriticalSection;
+
+/// Downgraded Pins can still be configured to operate in other <MODE>s.
+/// Useful for multiplexing where changing the mode of pins is necessary at runtime.
+impl<MODE> Pin<MODE> {
+  /// Configures the pin to operate as a floating input pin
+  pub fn into_floating_input(self, _cs: &CriticalSection) -> Pin<Input<Floating>> {
+    unsafe { (*self.port).set_mode_to_floating_input(self.i) }
+    Pin { i:self.i, port: self.port, _mode: PhantomData }
+  }
+  /// Configures the pin to operate as a pulled down input pin
+  pub fn into_pull_down_input(self, _cs: &CriticalSection) -> Pin<Input<PullDown>> {
+    unsafe { (*self.port).set_mode_to_pull_down_input(self.i) }
+    Pin { i:self.i, port: self.port, _mode: PhantomData }
+  }
+  /// Configures the pin to operate as a pulled up input pin
+  pub fn into_pull_up_input(self, _cs: &CriticalSection) -> Pin<Input<PullUp>> {
+    unsafe { (*self.port).set_mode_to_pull_up_input(self.i) }
+    Pin { i:self.i, port: self.port, _mode: PhantomData }
+  }
+  /// Configures the pin to operate as an open drain output pin
+  pub fn into_open_drain_output(self, _cs: &CriticalSection) -> Pin<Output<OpenDrain>> {
+    unsafe { (*self.port).set_mode_to_open_drain_output(self.i) }
+    Pin { i:self.i, port: self.port, _mode: PhantomData }
+  }
+}
 
 impl<MODE> StatefulOutputPin for Pin<Output<MODE>> {
     #[inline(always)]
@@ -165,6 +196,57 @@ macro_rules! gpio_trait {
             fn set_low(&self, pos: u8) {
                 // NOTE(unsafe) atomic write to a stateless register
                 unsafe { self.bsrr.write(|w| w.bits(1 << (pos + 16))) }
+            }
+
+            fn set_mode_to_floating_input(&self, pos: u8) {
+                let offset = 2 * pos;
+                unsafe {
+                    self.pupdr.modify(|r, w| {
+                        w.bits((r.bits() & !(0b11 << offset)) | (0b00 << offset))
+                    });
+                    self.moder.modify(|r, w| {
+                        w.bits((r.bits() & !(0b11 << offset)) | (0b00 << offset))
+                    });
+                }
+            }
+
+            fn set_mode_to_pull_down_input(&self, pos: u8) {
+                let offset = 2 * pos;
+                unsafe {
+                    self.pupdr.modify(|r, w| {
+                        w.bits((r.bits() & !(0b11 << offset)) | (0b10 << offset))
+                    });
+                    self.moder.modify(|r, w| {
+                        w.bits((r.bits() & !(0b11 << offset)) | (0b00 << offset))
+                    });
+                }
+            }
+
+            fn set_mode_to_pull_up_input(&self, pos: u8) {
+                let offset = 2 * pos;
+                unsafe {
+                    self.pupdr.modify(|r, w| {
+                        w.bits((r.bits() & !(0b11 << offset)) | (0b01 << offset))
+                    });
+                    self.moder.modify(|r, w| {
+                        w.bits((r.bits() & !(0b11 << offset)) | (0b00 << offset))
+                    });
+                }
+            }
+
+            fn set_mode_to_open_drain_output(&self, pos: u8) {
+                let offset = 2 * pos;
+                unsafe {
+                    self.pupdr.modify(|r, w| {
+                        w.bits((r.bits() & !(0b11 << offset)) | (0b00 << offset))
+                    });
+                    self.otyper.modify(|r, w| {
+                        w.bits(r.bits() | (0b1 << offset))
+                    });
+                    self.moder.modify(|r, w| {
+                        w.bits((r.bits() & !(0b11 << offset)) | (0b01 << offset))
+                    });
+                }
             }
         }
     };
